@@ -1,4 +1,6 @@
 *.egg-info
+.coverage
+.coverage.*
 .tox
 __pycache__
 node_modules
