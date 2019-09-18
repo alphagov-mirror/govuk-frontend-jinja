@@ -1,3 +1,5 @@
+import builtins
+from collections.abc import Sized
 
 import jinja2
 import jinja2.ext
@@ -11,8 +13,8 @@ def njk_to_j2(template):
     # Some component templates (such as radios) use `items` as the key of
     # an object element. However `items` is also the name of a dictionary
     # method in Python, and Jinja2 will prefer to return this attribute
-    # over the dict item.
-    template = template.replace(".items", "['items']")
+    # over the dict item. Handle specially.
+    template = re.sub(r"\.items\b", ".items__njk", template)
 
     # Some component templates (such as radios) append the loop index to a
     # string. As the loop index is an integer this causes a TypeError in
@@ -59,9 +61,9 @@ def njk_to_j2(template):
     template = re.sub(r"""(?<!['".])describedBy""", r"nonlocal.describedBy", template)
 
     # Issue#16: some component templates test the length of an array by trying
-    # to get an attribute `.length`. Instead we need to use the Jinja filter
-    # `length()`.
-    template = template.replace(".length", " | length")
+    # to get an attribute `.length`. We need to handle this specially because
+    # .length isn't a thing in python
+    template = re.sub(r"\.length\b", ".length__njk", template)
 
     return template
 
@@ -108,6 +110,10 @@ class NunjucksUndefined(jinja2.runtime.Undefined):
         return str(self)
 
 
+_njk_signature = "__njk"
+_builtin_function_or_method_type = type({}.keys)
+
+
 class Environment(jinja2.Environment):
     def __init__(self, **kwargs):
         kwargs.setdefault("extensions", [NunjucksExtension])
@@ -120,3 +126,32 @@ class Environment(jinja2.Environment):
             return path.normpath(path.join(path.dirname(parent), template))
         else:
             return template
+
+    def _handle_njk(method_name):
+        def inner(self, obj, argument):
+            if argument.endswith(_njk_signature):
+                # a njk-originated access will always be assuming a dict lookup before an attr
+                final_method_name = "getitem"
+                final_argument = argument[:-len(_njk_signature)]
+            else:
+                final_argument = argument
+                final_method_name = method_name
+
+            # pleasantly surprised that super() works in this context
+            retval = builtins.getattr(super(), final_method_name)(obj, final_argument)
+
+            if argument == f"length{_njk_signature}" and isinstance(retval, jinja2.runtime.Undefined) \
+                and isinstance(obj, Sized):
+                return len(obj)
+            if argument.endswith(_njk_signature) and isinstance(retval, _builtin_function_or_method_type):
+                # the lookup has probably gone looking for attributes and found a builtin method. because
+                # any njk-originated lookup will have been made to prefer dict lookups over attributes, we
+                # can be fairly sure there isn't a dict key matching this - so we should just call this a
+                # failure.
+                return self.undefined(obj=obj, name=final_argument)
+            return retval
+        return inner
+
+    getitem = _handle_njk("getitem")
+
+    getattr = _handle_njk("getattr")

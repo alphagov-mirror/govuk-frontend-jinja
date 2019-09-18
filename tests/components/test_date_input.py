@@ -478,7 +478,6 @@ def test_date_input_with_error_on_year_input(env):
     )
 
 
-@pytest.mark.xfail(reason="attempting to access params.items")
 def test_date_input_with_default_items(env):
     template = env.from_string(
 """
