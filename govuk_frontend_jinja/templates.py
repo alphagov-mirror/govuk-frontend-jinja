@@ -1,6 +1,7 @@
 
 import jinja2
 import jinja2.ext
+from markupsafe import Markup
 
 import os.path as path
 import re
@@ -63,7 +64,46 @@ def njk_to_j2(template):
     # `length()`.
     template = template.replace(".length", " | length")
 
+    # see `indent_njk`
+    template = re.sub(re.escape("| indent") + r"\b", "| indent_njk", template)
+
     return template
+
+
+def indent_njk(
+    s, width=4, first=False, blank=False, indentfirst=None
+):
+    """A near-verbatim copy of jinja2's indent filter as of a2f5e2c7972c4d5148c1c75c724e24950d8605bc, including a fix
+    (not currently included in any stable release) for https://github.com/pallets/jinja/pull/826 which the govuk
+    templates readily run into. Remove this once we can safely assume everyone's moved on from jinja2 2.10.x
+    """
+    if indentfirst is not None:
+        first = indentfirst
+
+    indention = u' ' * width
+    newline = u'\n'
+
+    if isinstance(s, Markup):
+        indention = Markup(indention)
+        newline = Markup(newline)
+
+    s += newline  # this quirk is necessary for splitlines method
+
+    if blank:
+        rv = (newline + indention).join(s.splitlines())
+    else:
+        lines = s.splitlines()
+        rv = lines.pop(0)
+
+        if lines:
+            rv += newline + newline.join(
+                indention + line if line else line for line in lines
+            )
+
+    if first:
+        rv = indention + rv
+
+    return rv
 
 
 class NunjucksExtension(jinja2.ext.Extension):
@@ -113,6 +153,7 @@ class Environment(jinja2.Environment):
         kwargs.setdefault("extensions", [NunjucksExtension])
         kwargs.setdefault("undefined", NunjucksUndefined)
         super().__init__(**kwargs)
+        self.filters["indent_njk"] = indent_njk
 
     def join_path(self, template, parent):
         """Enable the use of relative paths in template import statements"""
